@@ -1,0 +1,7 @@
+.vs/
+bin/
+obj/
+**/__pycache__/
+*.py[cod]
+datos_entrenamiento.json
+desktop_icons.json

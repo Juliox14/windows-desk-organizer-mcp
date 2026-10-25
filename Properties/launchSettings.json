@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "DeskOrganizer": {
+      "commandName": "Project",
+      "commandLineArgs": "list-icons"
+    }
+  }
+}
