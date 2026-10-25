@@ -13,11 +13,11 @@ public sealed class DesktopTools(DesktopPlanningService desktop)
         Invoke(() => desktop.GetStateAsync(cancellationToken));
 
     [McpServerTool(Name = "preview_layout", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Preview an unexpired snapshot; rejects desktop changes. Strategies: name-ascending, usage-category (name heuristics), custom (reuses selected occupied slots; omitted icons stay fixed), spatial-groups (two adaptive bands with blank grid separators; requires every icon in 2 to 64 groups and one primary monitor). Group and icon-reference order determine placement. Does not move icons or create files. Review exact proposals before applying; previewOnly means application preconditions are not met.")]
+    [Description("Preview an unexpired snapshot; rejects desktop changes. Strategies: name-ascending, usage-category (name heuristics), custom (reuses selected occupied slots; omitted icons stay fixed), spatial-groups (two adaptive bands with blank grid separators), category-rows (one horizontal row per group). Spatial strategies require every icon in 2 to 64 groups and one primary monitor. Group and icon-reference order determine placement. Does not move icons or create files. Review exact proposals before applying; previewOnly means application preconditions are not met.")]
     public Task<LayoutPlan> PreviewLayout(
         [Description("Snapshot ID from get_desktop_state in this server session.")] string snapshotId,
-        [Description("name-ascending, usage-category, custom, or spatial-groups.")] string strategy = "name-ascending",
-        [Description("custom: 1 to 64 groups; spatial-groups: 2 to 64 groups covering every icon. Use distinct names and ordered iconRefs from this snapshot. No repeated references. Other strategies do not accept groups.")] LayoutGroup[]? groups = null,
+        [Description("name-ascending, usage-category, custom, spatial-groups, or category-rows.")] string strategy = "name-ascending",
+        [Description("custom: 1 to 64 groups; spatial-groups/category-rows: 2 to 64 groups covering every icon. Use distinct names and ordered iconRefs from this snapshot. No repeated references. Other strategies do not accept groups.")] LayoutGroup[]? groups = null,
         CancellationToken cancellationToken = default) =>
         Invoke(() => desktop.PreviewAsync(snapshotId, strategy, groups, cancellationToken));
 

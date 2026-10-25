@@ -17,6 +17,7 @@ Read [references/mcp-tools.md](references/mcp-tools.md) for arguments, examples,
 2. Follow the user's requested grouping. Classify recognizable names and keep uncertain items in a clearly identified group, or ask when uncertainty affects the request. Never merge equal display names into one icon; use their distinct references.
 3. Choose a strategy:
    - `spatial-groups`: separate categories with empty grid space. Supply 2 to 64 nonempty groups covering **every icon exactly once**. Group order is left to right across the top band, then the bottom band; the server selects the split and band heights to fit. It does not guarantee a particular corner, draw frames, or persist category labels.
+   - `category-rows`: put each category on one horizontal row. Supply 2 to 64 nonempty groups covering **every icon exactly once**. Icons follow reference order from left to right; categories follow group order from top to bottom. The number of categories must fit available grid rows, and the largest category must fit the columns. If groups do not fit, show the capacity error and ask before merging categories.
    - `custom`: order selected icons across their existing occupied slots; omitted icons stay fixed. Use when preserving unselected icons matters.
    - `name-ascending`: alphabetical order in existing slots.
    - `usage-category`: built-in name heuristics in existing slots.

@@ -12,6 +12,7 @@ public static class LayoutPlanner
         if (state.Icons.Select(icon => icon.Position).Distinct().Count() != state.Icons.Count)
             throw new DesktopException("AMBIGUOUS_LAYOUT", "Some observed positions overlap; a layout cannot be planned reliably.");
         if (strategy == "spatial-groups") return SpatialLayoutPlanner.Create(state, groups);
+        if (strategy == "category-rows") return CategoryRowsLayoutPlanner.Create(state, groups);
         if (strategy != "custom" && groups is not null)
             throw new DesktopException("INVALID_ARGUMENT", "Groups are accepted only with the custom strategy.");
 
@@ -33,7 +34,7 @@ public static class LayoutPlanner
                 ordered = ResolveGroups(state, groups, labels);
                 break;
             default:
-                throw new DesktopException("INVALID_ARGUMENT", "Strategy must be name-ascending, usage-category, custom, or spatial-groups.");
+                throw new DesktopException("INVALID_ARGUMENT", "Strategy must be name-ascending, usage-category, custom, spatial-groups, or category-rows.");
         }
 
         // Only selected icons contribute slots; all omitted icons retain their exact positions.

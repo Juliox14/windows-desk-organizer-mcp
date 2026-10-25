@@ -69,6 +69,8 @@ Writing tools are `apply_layout`, `get_operation`, `preview_restore_layout`, and
 
 Ask: **"Organize my desktop by functionality with spaces between categories. Show me the preview first."** The agent can classify icons into 2 to 64 nonempty groups, include every icon exactly once, and use `spatial-groups`. Inspect actual destinations: the automatic split into top/bottom bands adapts to capacity and does not guarantee fixed corner positions. Too little room returns `INSUFFICIENT_SPACE` before movement. `custom` can instead reorder selected icons in existing slots while keeping omitted icons fixed.
 
+For one horizontal row per category, use `category-rows`. It places icons left to right in each row and categories top to bottom. The number of categories must fit the available grid rows; merge categories only with the user's agreement.
+
 Retain the returned `operationId` and `backupId`. After a disconnect or `partial`/`unknown` result, inspect the same operation before doing more work. To restore, ask for a restoration preview from that backup and approve it; intervening edits or changed geometry may prevent automatic restoration.
 
 ## Local data and removal

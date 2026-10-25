@@ -5,6 +5,7 @@ Estado inicial: propuesta basada en revisión estática. El avance de implementa
 ## Avance de implementación
 
 - Entrega MCP + skill: estrategia `spatial-groups` con dos bandas, separadores vacíos y área de trabajo convertida a coordenadas de iconos bajo el DPI de Explorer. Skill portable con referencias a herramientas, guía de instalación, empaquetado autocontenido Windows x64 y workflow de prereleases por tag. La aplicación visual tipo Fences queda fuera de esta versión.
+- Nueva estrategia `category-rows`: una fila horizontal por categoría, con grupos ordenados de arriba abajo e iconos de izquierda a derecha; rechaza planes que excedan filas o columnas disponibles.
 
 - Extraídos `DeskOrganizer.Core` y `DeskOrganizer.Windows`; la CLI de compatibilidad conserva su proyecto y contratos públicos. Las firmas de memoria nativa usan `nuint`, la lectura heredada verifica arquitectura y los metadatos dejan de elegir archivos por prefijo.
 - Implementado `DeskOrganizer.Mcp` con el SDK oficial, transporte stdio, logs a stderr y registro explícito de `get_desktop_state` y `preview_layout`.
