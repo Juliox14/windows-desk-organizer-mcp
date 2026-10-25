@@ -7,4 +7,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Remove="src\**\*.cs;tests\**\*.cs" />
+    <ProjectReference Include="src\DeskOrganizer.Core\DeskOrganizer.Core.csproj" />
+    <ProjectReference Include="src\DeskOrganizer.Windows\DeskOrganizer.Windows.csproj" />
+  </ItemGroup>
 </Project>

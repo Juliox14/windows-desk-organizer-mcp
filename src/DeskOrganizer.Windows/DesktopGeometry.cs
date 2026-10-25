@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace DeskOrganizer;
 
 /// <summary>Observed geometry of the desktop ListView and the current display topology.</summary>
-internal static class DesktopGeometry
+public static class DesktopGeometry
 {
     private const uint LvmGetItemSpacing = 0x1033;
     private const int GwlStyle = -16;
@@ -33,8 +33,9 @@ internal static class DesktopGeometry
 
     private delegate bool MonitorCallback(IntPtr monitor, IntPtr hdc, IntPtr rect, IntPtr data);
 
-    [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
-    private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", SetLastError = true)]
+    private static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam,
+        uint flags, uint timeout, out nuint result);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
     private static extern int GetWindowStyle(IntPtr hwnd, int index);
@@ -54,6 +55,26 @@ internal static class DesktopGeometry
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool ScreenToClient(IntPtr hwnd, ref Point point);
+
+    // The caller must use DesktopDpiScope. Map both corners instead of assuming matching origins or scale.
+    internal static DesktopArea? ReadPlacementArea(IntPtr listView, DesktopGeometryInfo geometry)
+    {
+        if (geometry.Monitors.Count != 1 || !geometry.Monitors[0].Primary) return null;
+        var work = geometry.Monitors[0].WorkArea;
+        Point start = new() { X = work.Left, Y = work.Top };
+        Point end = new() { X = work.Right, Y = work.Bottom };
+        if (!ScreenToClient(listView, ref start) || !ScreenToClient(listView, ref end))
+            throw new DesktopException("UNSUPPORTED_GEOMETRY", "Could not map the monitor work area into icon view coordinates.");
+        var client = geometry.UsableArea;
+        var area = new DesktopArea(Math.Max(client.Left, start.X), Math.Max(client.Top, start.Y),
+            Math.Min(client.Right, end.X), Math.Min(client.Bottom, end.Y));
+        if (area.Right <= area.Left || area.Bottom <= area.Top)
+            throw new DesktopException("UNSUPPORTED_GEOMETRY", "The mapped work area does not intersect the desktop view.");
+        return area;
+    }
+
     [DllImport("user32.dll")]
     private static extern IntPtr GetThreadDpiAwarenessContext();
 
@@ -63,15 +84,19 @@ internal static class DesktopGeometry
     [DllImport("user32.dll")]
     private static extern int GetAwarenessFromDpiAwarenessContext(IntPtr context);
 
-    internal static object Capture(IntPtr listView)
+    public static DesktopGeometryInfo Capture(IntPtr listView)
     {
         if (!GetClientRect(listView, out Rect client))
             throw new InvalidOperationException("Could not read desktop ListView client area.");
 
-        long packedSpacing = SendMessage(listView, LvmGetItemSpacing, IntPtr.Zero, IntPtr.Zero).ToInt64();
+        // This message has no pointer payload, so a timed-out query has no remote buffer to free.
+        if (SendMessageTimeout(listView, LvmGetItemSpacing, IntPtr.Zero, IntPtr.Zero, 0x0002, 2000,
+            out nuint spacing) == IntPtr.Zero)
+            throw new TimeoutException("Desktop geometry query timed out.");
+        long packedSpacing = (long)spacing;
         int spacingX = (int)(packedSpacing & 0xffff);
         int spacingY = (int)((packedSpacing >> 16) & 0xffff);
-        var gridSpacing = spacingX > 0 && spacingY > 0 ? new { x = spacingX, y = spacingY } : null;
+        var gridSpacing = spacingX > 0 && spacingY > 0 ? new DesktopSpacing(spacingX, spacingY) : null;
 
         // ListView style reports its current auto-arrange mode, not a possibly stale registry value.
         Marshal.SetLastPInvokeError(0);
@@ -79,7 +104,7 @@ internal static class DesktopGeometry
         bool? autoArrange = style == 0 && Marshal.GetLastWin32Error() != 0
             ? null : (style & LvsAutoArrange) != 0;
 
-        var monitors = new List<object>();
+        var monitors = new List<DesktopMonitor>();
         bool infoFailed = false;
         MonitorCallback callback = (monitor, _, _, _) =>
         {
@@ -89,11 +114,8 @@ internal static class DesktopGeometry
                 infoFailed = true;
                 return false;
             }
-            monitors.Add(new
-            {
-                bounds = Area(info.Monitor), workArea = Area(info.Work),
-                primary = (info.Flags & MonitorInfoPrimary) != 0
-            });
+            monitors.Add(new DesktopMonitor(Area(info.Monitor), Area(info.Work),
+                (info.Flags & MonitorInfoPrimary) != 0));
             return true;
         };
         bool enumerated = EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, callback, IntPtr.Zero);
@@ -102,19 +124,12 @@ internal static class DesktopGeometry
             throw new InvalidOperationException("Could not enumerate desktop monitors.");
 
         uint windowDpi = GetDpiForWindow(listView);
-        return new
-        {
-            gridSpacing,
-            usableArea = Area(client),
-            monitors,
-            windowDpi = windowDpi == 0 ? (uint?)null : windowDpi,
-            // A window DPI is not evidence of each monitor's physical DPI or scale.
-            monitorDpi = (uint?)null,
-            autoArrange
-        };
+        return new DesktopGeometryInfo(gridSpacing, Area(client),
+            monitors.OrderBy(monitor => monitor.Bounds.Left).ThenBy(monitor => monitor.Bounds.Top).ToArray(),
+            windowDpi == 0 ? null : windowDpi, null, autoArrange);
     }
 
-    internal static bool? ReadAutoArrange(IntPtr listView)
+    public static bool? ReadAutoArrange(IntPtr listView)
     {
         Marshal.SetLastPInvokeError(0);
         int style = GetWindowStyle(listView, GwlStyle);
@@ -122,7 +137,7 @@ internal static class DesktopGeometry
             ? null : (style & LvsAutoArrange) != 0;
     }
 
-    internal static (int Left, int Top, int Right, int Bottom) ReadClientBounds(IntPtr listView)
+    public static (int Left, int Top, int Right, int Bottom) ReadClientBounds(IntPtr listView)
     {
         if (!GetClientRect(listView, out Rect client))
             throw new InvalidOperationException("Could not read desktop ListView client area.");
@@ -130,7 +145,7 @@ internal static class DesktopGeometry
     }
 
     /// <summary>Read the caller's DPI context and map the icon view into its reported screen coordinates.</summary>
-    internal static object ProbeCoordinates(IntPtr listView)
+    public static object ProbeCoordinates(IntPtr listView)
     {
         Rect client = default;
         bool hasClient = GetClientRect(listView, out client);
@@ -193,8 +208,5 @@ internal static class DesktopGeometry
         catch (EntryPointNotFoundException) { return null; }
     }
 
-    private static object Area(Rect rect) => new
-    {
-        left = rect.Left, top = rect.Top, right = rect.Right, bottom = rect.Bottom
-    };
+    private static DesktopArea Area(Rect rect) => new(rect.Left, rect.Top, rect.Right, rect.Bottom);
 }

@@ -4,11 +4,11 @@ namespace DeskOrganizer;
 /// Matches independent Shell and ListView observations without assuming their indices
 /// have the same order. Any duplicate or missing name+position pair stays unresolved.
 /// </summary>
-internal static class ShellIdentityMatch
+public static class ShellIdentityMatch
 {
-    internal sealed record MatchedIcon(DesktopIcon Icon, string? ShellId, bool? HasFileSystemPath);
+    public sealed record MatchedIcon(DesktopIcon Icon, string? ShellId, bool? HasFileSystemPath);
 
-    internal static IReadOnlyList<MatchedIcon> Attach(
+    public static IReadOnlyList<MatchedIcon> Attach(
         IReadOnlyList<DesktopIcon> icons, IReadOnlyList<ShellIdentityProbe.Item> shellItems)
     {
         if (icons.Count != shellItems.Count)

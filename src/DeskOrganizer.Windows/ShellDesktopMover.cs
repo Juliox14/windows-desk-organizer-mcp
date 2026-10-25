@@ -1,22 +1,141 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace DeskOrganizer;
 
-/// <summary>Positions one desktop Shell item by its child PIDL, never by a ListView index.</summary>
-internal static class ShellDesktopMover
+/// <summary>Positions desktop Shell items by child PIDL. Batch execution is isolated in the MCP worker.</summary>
+public static class ShellDesktopMover
 {
     private static readonly Guid BrowserService = new("4C96BE40-915C-11CF-99D3-00AA004AE837");
     private static readonly Guid BrowserId = typeof(IShellBrowser).GUID;
     private const uint PositionItem = 0x80; // SVSI_POSITIONITEM, points in view coordinates.
 
-    internal static void Move(string name, int fromX, int fromY, int toX, int toY, int expectedCount)
+    /// <summary>Worker-only batch path. The parent process supplies timeout and process lifetime isolation.</summary>
+    public static DesktopMutationResult MoveBatch(DesktopMutation mutation)
+    {
+        DesktopMutationResult? result = null;
+        var thread = new Thread(() =>
+        {
+            bool submitted = false;
+            try
+            {
+                MutationValidator.Validate(mutation);
+                MoveBatchOnSta(mutation, () => submitted = true);
+                result = new DesktopMutationResult(submitted);
+            }
+            catch (DesktopException error)
+            { result = new DesktopMutationResult(submitted, error.Code, OutcomeUncertain: submitted); }
+            catch (Exception)
+            { result = new DesktopMutationResult(submitted, "NATIVE_MOVE_FAILED", OutcomeUncertain: submitted); }
+        })
+        { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join(); // Only the disposable worker can block here; the parent owns its deadline.
+        return result ?? throw new InvalidOperationException();
+    }
+
+    private static void MoveBatchOnSta(DesktopMutation mutation, Action beforeSubmit)
+    {
+        object? windows = null, dispatch = null;
+        IShellBrowser? browser = null;
+        IFolderView? view = null;
+        IntPtr browserPtr = IntPtr.Zero, viewPtr = IntPtr.Zero, desktopPidl = IntPtr.Zero;
+        var children = new List<IntPtr>();
+        try
+        {
+            IntPtr listView = WindowsDesktopBackend.FindView();
+            using var dpi = DesktopDpiScope.ForWindow(listView);
+            string token = WindowsDesktopBackend.ViewToken(listView);
+            windows = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("9BA05972-F6A8-11CF-A442-00A0C90A8F39"))!);
+            dynamic shellWindows = windows!;
+            object location = 0, empty = Type.Missing;
+            dispatch = shellWindows.FindWindowSW(ref location, ref empty, 8, out int _, 1);
+            if (dispatch is not IComServiceProvider services)
+                throw new DesktopException("DESKTOP_UNAVAILABLE", "The desktop Shell view is unavailable.");
+            Guid service = BrowserService, iid = BrowserId;
+            Marshal.ThrowExceptionForHR(services.QueryService(ref service, ref iid, out browserPtr));
+            browser = (IShellBrowser)Marshal.GetTypedObjectForIUnknown(browserPtr, typeof(IShellBrowser));
+            Marshal.ThrowExceptionForHR(browser.QueryActiveShellView(out viewPtr));
+            view = (IFolderView)Marshal.GetTypedObjectForIUnknown(viewPtr, typeof(IFolderView));
+            Marshal.ThrowExceptionForHR(SHGetSpecialFolderLocation(IntPtr.Zero, 0, out desktopPidl));
+            if (desktopPidl == IntPtr.Zero) throw new InvalidOperationException();
+            Marshal.ThrowExceptionForHR(view.ItemCount(2, out int count));
+            if (count != mutation.Before.Icons.Count || count > LayoutPlanner.MaxIcons)
+                throw new DesktopException("STALE_PLAN", "Desktop icon count changed before dispatch.");
+            var observed = new List<ObservedDesktopIcon>(count);
+            var byIdentity = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
+            for (int index = 0; index < count; index++)
+            {
+                Marshal.ThrowExceptionForHR(view.Item(index, out IntPtr child));
+                if (child == IntPtr.Zero) throw new InvalidOperationException();
+                children.Add(child);
+                Marshal.ThrowExceptionForHR(view.GetItemPosition(child, out POINT position));
+                IntPtr absolute = ILCombine(desktopPidl, child);
+                if (absolute == IntPtr.Zero) throw new InvalidOperationException();
+                try
+                {
+                    string name = ReadName(absolute, 0);
+                    string parsingName = ReadName(absolute, 0x80028000);
+                    string identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(parsingName))).ToLowerInvariant();
+                    if (!byIdentity.TryAdd(identity, child))
+                        throw new DesktopException("UNRESOLVED_IDENTITY", "Shell identity is ambiguous.");
+                    observed.Add(new ObservedDesktopIcon(name, new DesktopPoint(position.X, position.Y), identity));
+                }
+                finally { Marshal.FreeCoTaskMem(absolute); }
+            }
+            var geometry = DesktopGeometry.Capture(listView);
+            var actual = new DesktopObservation(token, observed, geometry, DpiAligned: true,
+                ExplorerInstance: token[..token.LastIndexOf(':')], PlacementArea: DesktopGeometry.ReadPlacementArea(listView, geometry));
+            if (DesktopPlanningService.Fingerprint(actual) != DesktopPlanningService.Fingerprint(mutation.Before)
+                || WindowsDesktopBackend.FindView() != listView || WindowsDesktopBackend.ViewToken(listView) != token)
+                throw new DesktopException("STALE_PLAN", "Desktop state changed before Shell dispatch.");
+            // S_FALSE (1) means auto-arrange is disabled. Recheck the actual Shell view as well as the ListView style.
+            if (view.GetAutoArrange() != 1 || DesktopGeometry.ReadAutoArrange(listView) != false)
+                throw new DesktopException("AUTO_ARRANGE_ENABLED", "Desktop auto-arrange is enabled or unavailable.");
+            var source = observed.ToDictionary(icon => icon.IdentityKey!, StringComparer.Ordinal);
+            var changed = mutation.Targets.Where(target => target.Position != source[target.IdentityKey].Position).ToArray();
+            if (changed.Length == 0) return;
+            var pidls = changed.Select(target => byIdentity[target.IdentityKey]).ToArray();
+            var points = changed.Select(target => new POINT { X = target.Position.X, Y = target.Position.Y }).ToArray();
+            beforeSubmit();
+            // One batch supports permutations without inventing a temporary desktop location. It is not an atomic transaction.
+            Marshal.ThrowExceptionForHR(view.SelectAndPositionItems((uint)changed.Length, pidls, points, PositionItem));
+        }
+        finally
+        {
+            foreach (IntPtr child in children) Marshal.FreeCoTaskMem(child);
+            if (desktopPidl != IntPtr.Zero) Marshal.FreeCoTaskMem(desktopPidl);
+            if (viewPtr != IntPtr.Zero) Marshal.Release(viewPtr);
+            if (browserPtr != IntPtr.Zero) Marshal.Release(browserPtr);
+            if (view is not null) Marshal.ReleaseComObject(view);
+            if (browser is not null) Marshal.ReleaseComObject(browser);
+            if (dispatch is not null && Marshal.IsComObject(dispatch)) Marshal.ReleaseComObject(dispatch);
+            if (windows is not null && Marshal.IsComObject(windows)) Marshal.ReleaseComObject(windows);
+        }
+    }
+
+    private static string ReadName(IntPtr absolute, uint kind)
+    {
+        int hr = SHGetNameFromIDList(absolute, kind, out IntPtr name);
+        try
+        {
+            Marshal.ThrowExceptionForHR(hr);
+            return Marshal.PtrToStringUni(name) ?? throw new InvalidOperationException();
+        }
+        finally { if (name != IntPtr.Zero) Marshal.FreeCoTaskMem(name); }
+    }
+
+    public static void Move(string name, int fromX, int fromY, int toX, int toY, int expectedCount)
     {
         Exception? error = null;
         var thread = new Thread(() =>
         {
             try { MoveOnSta(name, fromX, fromY, toX, toY, expectedCount); }
             catch (Exception ex) { error = ex; }
-        }) { IsBackground = true };
+        })
+        { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         // A timed-out COM call may still complete later: never retry or treat it as a definite failure.
@@ -147,8 +266,11 @@ internal static class ShellDesktopMover
         [PreserveSig] int ItemCount(uint flags, out int count);
         void Items(); void GetSelectionMarkedItem(); void GetFocusedItem();
         [PreserveSig] int GetItemPosition(IntPtr childPidl, out POINT position);
-        void GetSpacing(); void GetDefaultSpacing(); void GetAutoArrange(); void SelectItem();
-        [PreserveSig] int SelectAndPositionItems(uint count,
+        void GetSpacing(); void GetDefaultSpacing();
+        [PreserveSig] int GetAutoArrange();
+        void SelectItem();
+        [PreserveSig]
+        int SelectAndPositionItems(uint count,
             [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)] IntPtr[] childPidls,
             [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)] POINT[] positions, uint flags);
     }

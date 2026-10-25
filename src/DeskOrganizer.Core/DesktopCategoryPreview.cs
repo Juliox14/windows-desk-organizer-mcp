@@ -1,7 +1,7 @@
 namespace DeskOrganizer;
 
 /// <summary>Conservative name-based usage groups for a read-only layout preview.</summary>
-internal static class DesktopCategoryPreview
+public static class DesktopCategoryPreview
 {
     private static readonly string[] Groups =
     {
@@ -46,7 +46,9 @@ internal static class DesktopCategoryPreview
         ["Red"] = "utilities"
     };
 
-    internal static object Create(string snapshotId, IReadOnlyList<DesktopIcon> icons)
+    public static IReadOnlyList<string> CategoryNames { get; } = Array.AsReadOnly(Groups);
+
+    public static object Create(string snapshotId, IReadOnlyList<DesktopIcon> icons)
     {
         var slots = icons.OrderBy(icon => icon.X).ThenBy(icon => icon.Y)
             .Select(icon => (icon.X, icon.Y)).ToArray();
@@ -78,7 +80,7 @@ internal static class DesktopCategoryPreview
         };
     }
 
-    private static string CategoryFor(string name)
+    public static string CategoryFor(string name)
     {
         if (KnownApplications.TryGetValue(name, out string? category)) return category;
         if (name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)

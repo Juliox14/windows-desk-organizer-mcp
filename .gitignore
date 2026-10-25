@@ -5,3 +5,5 @@ obj/
 *.py[cod]
 datos_entrenamiento.json
 desktop_icons.json
+/odd/tasks/
+/artifacts/

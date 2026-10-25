@@ -1,9 +1,9 @@
 namespace DeskOrganizer;
 
 /// <summary>Hypothetical reassignment of already occupied desktop icon positions; never applies changes.</summary>
-internal static class DesktopLayoutPreview
+public static class DesktopLayoutPreview
 {
-    internal static object Create(string snapshotId, IReadOnlyList<DesktopIcon> icons)
+    public static object Create(string snapshotId, IReadOnlyList<DesktopIcon> icons)
     {
         // Reusing observed slots avoids inventing an origin, screen coordinate conversion, or capacity.
         var slots = icons.OrderBy(icon => icon.X).ThenBy(icon => icon.Y)

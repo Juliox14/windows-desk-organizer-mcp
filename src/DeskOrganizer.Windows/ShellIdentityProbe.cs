@@ -8,14 +8,28 @@ namespace DeskOrganizer;
 /// Read-only experiment: enumerate the actual desktop Shell view rather than inferring
 /// an item's identity from its ListView index or visible text.
 /// </summary>
-internal static class ShellIdentityProbe
+public static class ShellIdentityProbe
 {
     private static readonly Guid TopLevelBrowserService = new("4C96BE40-915C-11CF-99D3-00AA004AE837");
     private static readonly Guid ShellBrowserId = typeof(IShellBrowser).GUID;
 
-    internal sealed record Item(int ViewIndex, string Name, int X, int Y, string? ShellId, bool HasFileSystemPath);
+    private static readonly object QueryGate = new();
+    private static Thread? pendingQuery;
 
-    internal static IReadOnlyList<Item> Capture()
+    public sealed record Item(int ViewIndex, string Name, int X, int Y, string? ShellId, bool HasFileSystemPath);
+
+    public static IReadOnlyList<Item> Capture()
+    {
+        // COM queries may outlive a timeout. Never accumulate abandoned STA threads.
+        lock (QueryGate)
+        {
+            if (pendingQuery?.IsAlive == true)
+                throw new DesktopException("SHELL_BUSY", "A previous Shell query is still running. Try again after it finishes.");
+            return CaptureOnce();
+        }
+    }
+
+    private static IReadOnlyList<Item> CaptureOnce()
     {
         IReadOnlyList<Item>? result = null;
         Exception? error = null;
@@ -25,6 +39,7 @@ internal static class ShellIdentityProbe
             catch (Exception ex) { error = ex; }
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
+        pendingQuery = thread;
         thread.Start();
         if (!thread.Join(TimeSpan.FromSeconds(10)))
             throw new TimeoutException("Desktop Shell query timed out.");
@@ -34,6 +49,7 @@ internal static class ShellIdentityProbe
 
     private static IReadOnlyList<Item> ReadShellView()
     {
+        using var dpi = DesktopDpiScope.ForWindow(WindowsDesktopBackend.FindView());
         object? windows = null;
         object? dispatch = null;
         IShellBrowser? browser = null;
@@ -67,7 +83,8 @@ internal static class ShellIdentityProbe
             Marshal.ThrowExceptionForHR(SHGetSpecialFolderLocation(IntPtr.Zero, 0, out desktopPidl));
             if (desktopPidl == IntPtr.Zero) throw new InvalidOperationException("Desktop Shell folder is unavailable.");
             Marshal.ThrowExceptionForHR(folderView.ItemCount(2, out int count)); // SVGIO_ALLVIEW
-            if (count < 0 || count > 100_000) throw new InvalidOperationException("Invalid desktop icon count.");
+            if (count < 0 || count > LayoutPlanner.MaxIcons)
+                throw new DesktopException("LIMIT_EXCEEDED", "Desktop icon count exceeds the supported query size.");
 
             var items = new List<Item>(count);
             for (int index = 0; index < count; index++)
@@ -82,6 +99,8 @@ internal static class ShellIdentityProbe
                     absolute = ILCombine(desktopPidl, child);
                     if (absolute == IntPtr.Zero) throw new InvalidOperationException("Could not resolve Shell item.");
                     string name = GetName(absolute, 0) ?? ""; // SIGDN_NORMALDISPLAY
+                    if (name.Length > 1024)
+                        throw new DesktopException("LIMIT_EXCEEDED", "Desktop icon label exceeds the supported query size.");
                     string? parsingName = GetName(absolute, 0x80028000); // SIGDN_DESKTOPABSOLUTEPARSING
                     string? shellId = string.IsNullOrWhiteSpace(parsingName)
                         ? null
