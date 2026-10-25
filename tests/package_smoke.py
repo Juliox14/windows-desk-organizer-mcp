@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import queue
 import subprocess
 import tempfile
@@ -16,6 +16,22 @@ import zipfile
 def check(value, message):
     if not value:
         raise RuntimeError(message)
+
+
+def check_archive_path(root, entry):
+    # ZIP member names use POSIX separators, but also reject Windows-rooted paths
+    # and backslash traversal before resolving the target on the host platform.
+    posix_entry = PurePosixPath(entry.replace("\\", "/"))
+    windows_entry = PureWindowsPath(entry)
+    check(bool(posix_entry.parts) and not posix_entry.is_absolute() and ".." not in posix_entry.parts
+          and not windows_entry.is_absolute() and not windows_entry.drive,
+          f"Unsafe archive path: {entry!r}")
+    resolved_root = root.resolve()
+    resolved_target = resolved_root.joinpath(*posix_entry.parts).resolve()
+    try:
+        resolved_target.relative_to(resolved_root)
+    except ValueError as error:
+        raise RuntimeError(f"Unsafe archive path: {entry!r}") from error
 
 
 class Client:
@@ -105,7 +121,7 @@ def main():
         staging = Path(directory)
         with zipfile.ZipFile(archive) as zipped:
             for entry in zipped.namelist():
-                check((staging / entry).resolve().is_relative_to(staging), "Unsafe archive path")
+                check_archive_path(staging, entry)
             zipped.extractall(staging)
         roots = list(staging.glob("*/package.json"))
         check(len(roots) == 1, "Package must contain exactly one root manifest")
