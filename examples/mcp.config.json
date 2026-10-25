@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "desk-organizer": {
+      "command": "C:\\Tools\\DeskOrganizer\\server\\DeskOrganizer.Mcp.exe",
+      "args": []
+    }
+  }
+}

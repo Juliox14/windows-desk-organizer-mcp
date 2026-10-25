@@ -1,0 +1,67 @@
+name: Windows MCP package
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (manual runs create artifacts, not a public release)
+        required: true
+        default: preview
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore and build synthetic checks
+        shell: pwsh
+        run: |
+          dotnet restore DeskOrganizer.sln
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build DeskOrganizer.sln -c Release --no-restore --disable-build-servers -m:1
+      - name: Synthetic checks (never move the runner desktop)
+        run: dotnet tests/DeskOrganizer.Tests/bin/Release/net8.0-windows/DeskOrganizer.Tests.dll
+      - name: Package
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: ./scripts/Publish-Package.ps1 -Version $env:PACKAGE_VERSION
+      - name: Verify extracted package protocol
+        shell: pwsh
+        run: |
+          $archive = (Get-ChildItem -LiteralPath artifacts/packages -Filter '*.zip').FullName
+          python tests/package_smoke.py $archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-mcp-package
+          path: artifacts/packages/*
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-mcp-package
+          path: packages
+      - name: Publish prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" packages/* --verify-tag --prerelease --title "DeskOrganizer MCP $RELEASE_TAG" --notes "Windows x64 MCP server and portable Agent Skill. Extract the ZIP and follow its README.md. Writing is experimental and disabled by default."

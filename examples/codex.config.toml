@@ -1,0 +1,6 @@
+# Merge into ~/.codex/config.toml. Replace the path with the extracted package's absolute path.
+[mcp_servers.desk-organizer]
+command = 'C:\Tools\DeskOrganizer\server\DeskOrganizer.Mcp.exe'
+args = []
+# To expose operation tools after reviewing the installation guide:
+# args = ["--enable-writes"]
